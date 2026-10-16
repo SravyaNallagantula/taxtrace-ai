@@ -8,6 +8,8 @@ from __future__ import annotations
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from pathlib import Path
+import os
+import secrets
 
 from fastapi import FastAPI, Header, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
@@ -52,6 +54,45 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+@app.middleware("http")
+async def demo_auth(request, call_next):
+    from fastapi.responses import Response
+
+    password = os.environ.get("TAXTRACE_DEMO_PASSWORD")
+
+    # Keep the existing local development application unchanged.
+    if not password:
+        return await call_next(request)
+
+    # Allow Render to check that the application is healthy.
+    if request.url.path == "/api/health":
+        return await call_next(request)
+
+    username = os.environ.get("TAXTRACE_DEMO_USER", "reviewer")
+    credentials = request.headers.get("authorization", "")
+
+    import base64
+    try:
+        scheme, encoded = credentials.split(" ", 1)
+        decoded = base64.b64decode(encoded, validate=True).decode("utf-8")
+        supplied_user, supplied_password = decoded.split(":", 1)
+        valid = (
+            scheme.lower() == "basic"
+            and secrets.compare_digest(supplied_user, username)
+            and secrets.compare_digest(supplied_password, password)
+        )
+    except (ValueError, UnicodeError):
+        valid = False
+
+    if not valid:
+        return Response(
+            status_code=401,
+            content="Demo login required",
+            headers={"WWW-Authenticate": 'Basic realm="TaxTrace Demo"'},
+        )
+
+    return await call_next(request)
+
 
 
 class ReviewUpdate(BaseModel):
